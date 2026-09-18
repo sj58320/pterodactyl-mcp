@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pterodactyl-mcp"
+version = "0.1.0"
+description = "Pterodactyl file management and server power controls over MCP stdio"
+requires-python = ">=3.11"
+dependencies = ["mcp>=1.28,<2", "httpx>=0.28,<1", "websockets>=15,<18"]
+
+[project.scripts]
+pterodactyl-mcp = "pterodactyl_mcp:main"
+
+[tool.setuptools]
+py-modules = ["pterodactyl_mcp", "console_capture", "local_records"]

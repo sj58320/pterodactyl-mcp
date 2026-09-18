@@ -1,0 +1,7 @@
+{
+  "panel_url": "https://panel.example.com",
+  "api_key": "",
+  "server_aliases": {},
+  "transfer_directory": "transfers",
+  "backup_directory": "backups"
+}
