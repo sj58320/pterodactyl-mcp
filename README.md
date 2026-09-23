@@ -101,6 +101,17 @@ HTTP 주소는 API 키와 파일 전송을 암호화하지 않습니다. 가능�
 | invite_subuser | 기존 패널 계정을 서브유저로 추가(관리자 계정·Application 키 필요) |
 | update_subuser | 서브유저 권한 전체 지정 또는 추가/제거(관리자 계정 전용) |
 | remove_subuser | 서브유저 접근 해제(관리자 계정 전용) |
+| admin_list_nodes | 노드 용량·과할당·남은 메모리/디스크(관리자 키) |
+| admin_list_node_allocations | 노드의 IP:포트 목록과 배정된 서버, 빈 포트 필터(관리자 키) |
+| admin_list_eggs | 에그 목록, 에그별 이미지·startup·변수(관리자 키) |
+| admin_get_server | 소유자·노드·에그·이미지·startup·숨은 변수·한도·포트(관리자 키) |
+| admin_create_server | 사전 검증 후 서버 생성·설치, 기본은 미리보기(관리자 키) |
+| admin_reinstall_server | 설치 스크립트 재실행, 기본은 미리보기(관리자 키) |
+| admin_update_limits | 메모리·스왑·디스크·CPU·IO·스레드·기능 한도 변경, 기본은 미리보기(관리자 키) |
+| admin_update_startup | startup 명령·에그·이미지·변수 변경, 기본은 미리보기(관리자 키) |
+| admin_update_allocations | 서버 포트 추가·해제·대표 포트 변경, 기본은 미리보기(관리자 키) |
+| admin_create_allocations | 노드에 IP:포트(범위) 추가, 기본은 미리보기(관리자 키) |
+| admin_delete_allocations | 노드의 빈 포트 삭제, 기본은 미리보기(관리자 키) |
 
 `list_servers`에서 확인한 identifier를 사용합니다. `server_aliases`에 `"my-server": "실제 ID"` 같은 별칭도 추가할 수 있습니다. 아래 `my-server`는 사용자가 설정해야 하는 예제 별칭입니다.
 서버 경로는 Pterodactyl 파일 관리자에 보이는 루트를 기준으로 합니다. 아래 `/path/to/config.txt`는 실제 게임의 설정 파일 경로로 바꿔 사용합니다.
@@ -149,7 +160,7 @@ Pterodactyl API에는 조건부 원자적 쓰기가 없으므로 해시 확인�
 
 일반 부사용자는 각각 `control.start`, `control.restart`, `control.stop` 권한이 필요합니다.
 서버 소유자와 패널 관리자는 Pterodactyl 서버 권한 정책을 따릅니다.
-실제 권한은 API 키를 발급한 계정의 권한을 따릅니다. 사용자·서버 생성은 Application API 확장이 필요하며 현재 MCP에는 구현하지 않았습니다.
+실제 권한은 API 키를 발급한 계정의 권한을 따릅니다. 서버 생성과 관리자 설정 변경은 아래 관리자 도구를 사용합니다.
 
 Power API: https://github.com/pterodactyl/panel/blob/1.0-develop/app/Http/Controllers/Api/Client/Servers/PowerController.php
 권한 정책: https://github.com/pterodactyl/panel/blob/1.0-develop/app/Policies/ServerPolicy.php
@@ -165,6 +176,24 @@ cron은 패널의 시간대로 해석하며, 잘못된 식은 패널의 검증 �
 서브유저 도구는 연결된 계정이 패널 관리자일 때만 동작합니다. 권한 이름은 패널 목록(`list_subusers(include_catalog=true)`)과 대조해 모르는 이름을 거부하며, 패널이 항상 부여하는 `websocket.connect`를 결과에 포함합니다.
 패널은 계정이 없는 이메일을 초대하면 계정을 자동으로 만들기 때문에, `invite_subuser`는 관리자 Application API 키로 계정 존재를 먼저 확인하고 없으면 거부합니다.
 관리자 화면 `/admin/api`에서 Users 읽기 권한이 있는 키를 만들어 `config.local.json`의 `application_api_key`(또는 `PTERODACTYL_APPLICATION_API_KEY`)에 넣습니다. 권한 변경·해제 시 패널이 해당 사용자의 SFTP 접속을 끊습니다.
+
+## 관리자 도구 (Application API)
+
+`admin_*` 도구는 관리자 화면 `/admin/api`에서 만든 Application API 키(`application_api_key`)가 필요하며, 패널은 관리자 계정의 키만 허용합니다.
+필요한 권한: Servers·Allocations 읽기/쓰기, Nodes·Nests·Eggs·Locations·Users 읽기. Database Hosts·Server Databases는 필요 없습니다.
+
+변경 도구는 기본으로 미리보기만 하며, 실제로 보낼 요청과 바뀌는 값(`changes`)을 반환합니다. `apply=true`로 다시 호출해야 적용되고, 적용 후 다시 조회해 `verified`를 확인합니다.
+패널의 설정 변경 API는 값을 한 번에 모두 요구하므로 현재 값을 읽어 지정한 필드만 바꿔 보냅니다. 결과의 `before`를 다시 적용하면 되돌릴 수 있습니다.
+
+- 단위: 메모리·스왑·디스크는 MB(0은 무제한, 스왑 -1은 무제한), CPU는 코어 하나 기준 %(200은 2코어, 0은 무제한), IO는 10~1000.
+- `admin_update_startup`은 숨은 변수를 포함한 에그 변수 전체를 보냅니다. 에그를 바꾸면 같은 이름의 값은 유지하고 나머지는 에그 기본값을 쓰며, 재설치하지 않습니다.
+  일부 패널 버전은 `skip_scripts`를 조회 결과에 포함하지 않으므로, 이때는 관리자 화면의 'Skip Egg Install Script' 값을 확인해 `skip_scripts`로 직접 넘깁니다.
+- 시작 명령·변수·이미지·대표 포트 변경은 다음 시작부터, 자원 한도는 Wings가 실행 중인 컨테이너에 바로 적용합니다.
+- `admin_update_allocations`에서 추가할 포트는 기본으로 대표 포트와 같은 IP에서 고르며, 다른 IP는 `ip`로 지정합니다. 대표 포트는 해제할 수 없습니다.
+- `admin_create_server`는 요청 전에 소유자 계정(이메일 정확히 일치), 노드의 빈 포트, 에그 필수 변수를 확인하고 노드 여유 용량을 넘으면 경고합니다. 설치는 백그라운드로 진행되므로 `admin_get_server`의 `status`로 확인합니다.
+- `admin_reinstall_server`는 설치 스크립트 앞부분과 함께 경고를 보여줍니다. 설치 중 서버가 멈추고 스크립트가 쓰는 파일은 덮어써질 수 있으므로 필요하면 `compress_files`와 `download_file`로 `addons`·`cfg`를 먼저 받아둡니다.
+- `admin_delete_allocations`는 서버에 배정되지 않은 포트만 지우며, 하나라도 배정돼 있으면 아무것도 지우지 않습니다.
+- 서버 삭제, 정지(suspend), 노드 설정 변경, 패널 계정 생성·수정 도구는 제공하지 않습니다.
 
 ## 연결·계정·권한 진단
 
