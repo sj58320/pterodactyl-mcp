@@ -86,6 +86,21 @@ HTTP 주소는 API 키와 파일 전송을 암호화하지 않습니다. 가능�
 | list_file_backups | 원래 서버·경로별 로컬 파일 백업 목록 |
 | restore_file_backup | 백업 무결성 확인 및 현재 파일 보관 후 원래 경로로 복원 |
 | send_console_command | 게임 콘솔 명령 실행 및 선택적 응답 관찰 |
+| list_schedules | 스케줄과 작업 목록 조회 |
+| save_schedule | 스케줄 생성 또는 일부 필드 수정 |
+| delete_schedule | 스케줄과 작업 삭제 |
+| run_schedule | 스케줄 작업 즉시 실행 요청 |
+| save_schedule_task | 스케줄 작업(명령·전원·백업) 추가·수정·순서 변경 |
+| delete_schedule_task | 스케줄 작업 삭제 |
+| get_startup | 시작 명령·도커 이미지·시작 변수 조회 |
+| set_startup_variable | 편집 가능한 시작 변수 변경(다음 시작부터 적용) |
+| list_allocations | 서버에 붙은 포트 목록 |
+| update_allocation | 포트 메모 변경, 대표 포트 지정 |
+| remove_allocation | 대표가 아닌 포트를 서버에서 해제 |
+| list_subusers | 서브유저와 권한 조회(관리자 계정 전용) |
+| invite_subuser | 기존 패널 계정을 서브유저로 추가(관리자 계정·Application 키 필요) |
+| update_subuser | 서브유저 권한 전체 지정 또는 추가/제거(관리자 계정 전용) |
+| remove_subuser | 서브유저 접근 해제(관리자 계정 전용) |
 
 `list_servers`에서 확인한 identifier를 사용합니다. `server_aliases`에 `"my-server": "실제 ID"` 같은 별칭도 추가할 수 있습니다. 아래 `my-server`는 사용자가 설정해야 하는 예제 별칭입니다.
 서버 경로는 Pterodactyl 파일 관리자에 보이는 루트를 기준으로 합니다. 아래 `/path/to/config.txt`는 실제 게임의 설정 파일 경로로 바꿔 사용합니다.
@@ -135,10 +150,21 @@ Pterodactyl API에는 조건부 원자적 쓰기가 없으므로 해시 확인�
 일반 부사용자는 각각 `control.start`, `control.restart`, `control.stop` 권한이 필요합니다.
 서버 소유자와 패널 관리자는 Pterodactyl 서버 권한 정책을 따릅니다.
 실제 권한은 API 키를 발급한 계정의 권한을 따릅니다. 사용자·서버 생성은 Application API 확장이 필요하며 현재 MCP에는 구현하지 않았습니다.
-키 종류 및 관리자 API 권한 처리는 패널 버전에 따라 다르므로 별도 Application API 키가 필요한 설치도 있습니다.
 
 Power API: https://github.com/pterodactyl/panel/blob/1.0-develop/app/Http/Controllers/Api/Client/Servers/PowerController.php
 권한 정책: https://github.com/pterodactyl/panel/blob/1.0-develop/app/Policies/ServerPolicy.php
+
+## 스케줄·시작 변수·포트·서브유저
+
+스케줄은 `save_schedule`로 만들고 `save_schedule_task`로 작업을 추가합니다. 새 스케줄은 `name`, `minute`, `hour`가 필요하고 나머지 cron 필드는 `*`, 기본은 활성입니다. 수정할 때는 넘긴 필드만 바뀝니다.
+cron은 패널의 시간대로 해석하며, 잘못된 식은 패널의 검증 메시지를 그대로 반환합니다. 작업 간격 `time_offset`은 0~900초입니다.
+전원 작업은 `start`·`stop`·`restart`만 허용하고 `kill`은 거부합니다. `run_schedule`은 실행 요청 수락만 뜻하며 작업 성공을 보장하지 않습니다.
+`set_startup_variable`과 `update_allocation(make_primary=true)`은 다음 시작·재시작부터 적용되며 도구가 서버를 재시작하지 않습니다. 시작 명령 자체의 변경은 관리자 Application API 작업입니다.
+`remove_allocation`은 대표 포트를 해제하지 않으며, 패널은 포트 개수 제한이 없는 서버의 해제를 거부합니다.
+
+서브유저 도구는 연결된 계정이 패널 관리자일 때만 동작합니다. 권한 이름은 패널 목록(`list_subusers(include_catalog=true)`)과 대조해 모르는 이름을 거부하며, 패널이 항상 부여하는 `websocket.connect`를 결과에 포함합니다.
+패널은 계정이 없는 이메일을 초대하면 계정을 자동으로 만들기 때문에, `invite_subuser`는 관리자 Application API 키로 계정 존재를 먼저 확인하고 없으면 거부합니다.
+관리자 화면 `/admin/api`에서 Users 읽기 권한이 있는 키를 만들어 `config.local.json`의 `application_api_key`(또는 `PTERODACTYL_APPLICATION_API_KEY`)에 넣습니다. 권한 변경·해제 시 패널이 해당 사용자의 SFTP 접속을 끊습니다.
 
 ## 연결·계정·권한 진단
 
