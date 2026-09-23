@@ -68,6 +68,9 @@ HTTP 주소는 API 키와 파일 전송을 암호화하지 않습니다. 가능�
 | upload_file | transfers의 파일을 서버에 업로드, 최대 2 GiB |
 | create_directory | 폴더 생성 |
 | move_file | 파일/폴더 이동, 이름 변경 |
+| copy_file | 파일 복사(폴더 제외), 기본 이름 `이름 copy.확장자` 또는 지정 경로 |
+| compress_files | 같은 폴더의 파일/폴더를 .tar.gz로 압축, 선택적 저장 경로 |
+| decompress_file | zip·tar.gz·7z·rar·단일 .gz 등을 새 폴더에 압축 해제 |
 | trash_file | 삭제 대신 서버의 /.mcp-trash로 이동, 원래 경로 기록 |
 | list_trash | 휴지통 항목의 원래 경로·버린 시각·경과 일수·크기(폴더는 재귀 합산) |
 | restore_trash | 휴지통 항목을 기록된 원래 경로 또는 지정 경로로 복구 |
@@ -95,6 +98,12 @@ HTTP 주소는 API 키와 파일 전송을 암호화하지 않습니다. 가능�
 업로드는 기존 경로를 덮어쓰지 않습니다. 교체할 파일을 먼저 이름 변경하거나 휴지통으로 옮겨 보관한 뒤 업로드합니다.
 다운로드도 기존 로컬 파일을 덮어쓰지 않습니다. 전송은 메모리에 전체 파일을 올리지 않지만 네트워크/서버 제한과 도구 시간 제한의 영향을 받습니다.
 로컬 업로드/다운로드 범위는 설정의 `transfer_directory` 내부로 제한합니다.
+
+복사·압축·해제는 기존 파일을 덮어쓰지 않습니다. `copy_file`은 일반 파일만 복사하며, 폴더는 `compress_files`로 보관합니다.
+`compress_files`는 Wings가 만드는 tar.gz만 지원하므로 `destination`은 `.tar.gz` 또는 `.tgz`로 끝나야 합니다.
+Wings는 압축을 풀 때 같은 이름의 기존 파일을 덮어씁니다. 그래서 `decompress_file`은 존재하지 않는 새 폴더에만 풀고, 작업 중 아카이브를 그 폴더로 잠시 옮겼다가 원래 경로로 되돌립니다.
+플러그인 배포는 새 폴더에 풀고 내용을 확인한 뒤, 교체할 파일을 `trash_file`로 옮기고 `move_file`로 제자리에 놓습니다.
+압축·해제 요청은 150초 후 응답을 기다리지 않지만 Wings에서는 계속 진행될 수 있으므로, 시간 초과 시 폴더를 확인한 뒤 다시 시도합니다.
 
 `trash_file`은 항목을 `/.mcp-trash/<시각-고유값>-<이름>`으로 옮기고, 원래 경로를 `/.mcp-trash/<시각-고유값>.json`에 기록합니다.
 `list_trash`로 항목과 크기를 확인하고 `restore_trash(server, entry)`로 원래 경로에 복구합니다. 기록이 없는 이전 항목은 `destination`을 지정합니다.
