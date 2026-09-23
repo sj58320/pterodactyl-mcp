@@ -61,7 +61,7 @@ HTTP 주소는 API 키와 파일 전송을 암호화하지 않습니다. 가능�
 | 도구 | 기능 |
 | --- | --- |
 | list_servers | 접근 가능한 서버 이름과 ID |
-| list_files | 폴더 내용 조회 |
+| list_files | 폴더 내용 조회: 페이지(offset/limit), 이름 패턴, 정렬, 폴더 크기 합산 |
 | read_file | UTF-8 텍스트와 SHA-256 조회, 최대 2 MiB |
 | write_file | 텍스트 생성/수정, 원본 백업, 결과 재조회 |
 | download_file | 바이너리/텍스트를 로컬 transfers에 다운로드, 최대 2 GiB |
@@ -98,6 +98,11 @@ HTTP 주소는 API 키와 파일 전송을 암호화하지 않습니다. 가능�
 업로드는 기존 경로를 덮어쓰지 않습니다. 교체할 파일을 먼저 이름 변경하거나 휴지통으로 옮겨 보관한 뒤 업로드합니다.
 다운로드도 기존 로컬 파일을 덮어쓰지 않습니다. 전송은 메모리에 전체 파일을 올리지 않지만 네트워크/서버 제한과 도구 시간 제한의 영향을 받습니다.
 로컬 업로드/다운로드 범위는 설정의 `transfer_directory` 내부로 제한합니다.
+
+`list_files`는 한 번에 최대 `limit`개(기본 100, 최대 1000)를 돌려주며 `total`·`matched`와 다음 페이지의 `next_offset`(마지막이면 null)을 함께 반환합니다.
+`pattern`은 대소문자를 구분하는 glob(`*.so`)이고, `sort`는 `name`(폴더 먼저)·`size`·`modified`, `descending=true`로 역순입니다.
+기본 출력은 이름·종류·크기·수정 시각만 포함하며 `details=true`면 Wings의 모든 필드를 돌려줍니다. 폴더 크기는 `folder_sizes=true`일 때만 하위까지 합산하고, 조회 횟수 상한에 걸리면 `size_complete: false`(최소값)로 표시합니다.
+Wings는 없는 폴더에도 HTTP 500을 돌려주므로, 500이 나면 상위 폴더를 확인해 `Directory does not exist`/`Not a directory`로 구분하고, 폴더가 있으면 일시적 오류로 보고 한 번만 다시 조회합니다.
 
 복사·압축·해제는 기존 파일을 덮어쓰지 않습니다. `copy_file`은 일반 파일만 복사하며, 폴더는 `compress_files`로 보관합니다.
 `compress_files`는 Wings가 만드는 tar.gz만 지원하므로 `destination`은 `.tar.gz` 또는 `.tgz`로 끝나야 합니다.

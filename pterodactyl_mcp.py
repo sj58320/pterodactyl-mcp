@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import fnmatch
 import hashlib
 import json
 import logging
@@ -30,7 +31,8 @@ TRASH = "/.mcp-trash"
 STAMP = r"\d{8}T\d{6}Z-[0-9a-f]{12}"
 TRASH_ITEM = re.compile(rf"({STAMP})-(.+)")
 TRASH_INFO = re.compile(rf"({STAMP})\.json")
-TRASH_WALK_LIMIT = 200
+WALK_LIMIT = 200
+LIST_LIMIT = 1000
 # Stay below the MCP client's 180 s tool timeout; the panel itself waits up to 15 minutes.
 ARCHIVE_TIMEOUT = 150
 
@@ -336,14 +338,81 @@ class Files:
         """Normally stop the requested game server, disconnecting players (control.stop). Never sends kill. Optional wait 1..60 seconds for offline; default 0 returns acceptance only. Execute only when requested by the user."""
         return await self._power_with_wait(server, "stop", wait_seconds)
 
-    def list_files(self, server: str, directory: str = "/") -> list[dict]:
-        """List files/folders in a Linux directory relative to this server's root."""
-        result = self.api("GET", self.endpoint(server, "list"), params={"directory": remote_path(directory)})
-        return [item["attributes"] for item in result["data"]]
+    def _list(self, server: str, directory: str) -> list[dict]:
+        """Raw Wings listing. Wings answers HTTP 500 both for a missing folder and for transient failures."""
+        directory = remote_path(directory)
+        endpoint = self.endpoint(server, "list")
+        try:
+            return [item["attributes"] for item in self.api("GET", endpoint, params={"directory": directory})["data"]]
+        except PanelError as exc:
+            if exc.status != 500:
+                raise
+            failure = exc
+        if directory != "/":
+            entry = self.stat(server, directory)
+            if entry is None:
+                raise PanelError(f"Directory does not exist: {directory}", "not_found", failure.status)
+            if entry.get("is_file"):
+                raise PanelError(f"Not a directory: {directory}", "not_a_directory", failure.status)
+        # The folder exists, so the 500 was transient; a read-only listing is safe to repeat once.
+        return [item["attributes"] for item in self.api("GET", endpoint, params={"directory": directory})["data"]]
+
+    def list_files(self, server: str, directory: str = "/", pattern: str | None = None, sort: str = "name", descending: bool = False,
+                   offset: int = 0, limit: int = 100, folder_sizes: bool = False, details: bool = False) -> dict:
+        """List a folder relative to the server root, one page at a time. pattern filters names with a case-sensitive glob (e.g. "*.so"). sort: name (folders first), size or modified. next_offset is null on the last page. Folder size is null unless folder_sizes=true sums it recursively (bounded; size_complete=false means a lower bound). details=true returns every Wings field. A missing folder is reported as not found."""
+        server_id = self.server_id(server)
+        directory = remote_path(directory)
+        if sort not in {"name", "size", "modified"}:
+            raise ValueError("sort must be name, size or modified.")
+        for name, value, high in (("offset", offset, None), ("limit", limit, LIST_LIMIT)):
+            if isinstance(value, bool) or not isinstance(value, int) or value < (1 if name == "limit" else 0) or (high and value > high):
+                raise ValueError(f"limit must be an integer from 1 to {LIST_LIMIT}; offset a nonnegative integer.")
+        items = self._list(server_id, directory)
+        matched = [i for i in items if pattern is None or fnmatch.fnmatchcase(i["name"], pattern)]
+        budget, sizes = [WALK_LIMIT], {}
+
+        def is_dir(item):
+            return not (item.get("is_file") or item.get("is_symlink"))
+
+        def measure(selection):
+            for item in selection:
+                if is_dir(item) and item["name"] not in sizes:
+                    sizes[item["name"]] = self._tree_bytes(server_id, directory.rstrip("/") + "/" + item["name"], budget)
+
+        def size(item):
+            if not is_dir(item):
+                return item.get("size") or 0
+            return sizes[item["name"]][0] if item["name"] in sizes else None
+
+        if folder_sizes and sort == "size":
+            measure(matched)
+        keys = {"name": lambda i: (not is_dir(i), i["name"].casefold(), i["name"]),
+                "size": lambda i: (-1 if size(i) is None else size(i), i["name"]),
+                "modified": lambda i: (i.get("modified_at") or "", i["name"])}
+        page = sorted(matched, key=keys[sort], reverse=descending)[offset:offset + limit]
+        if folder_sizes:
+            measure(page)
+        entries = []
+        for item in page:
+            if details:
+                entry = dict(item)
+                if item["name"] in sizes:
+                    entry["size"] = size(item)
+            else:
+                entry = {"name": item["name"], "type": "symlink" if item.get("is_symlink") else "file" if item.get("is_file") else "directory",
+                         "size": size(item), "modified_at": item.get("modified_at")}
+            if item["name"] in sizes:
+                entry["size_complete"] = sizes[item["name"]][1]
+            entries.append(entry)
+        result = {"server": server_id, "directory": directory, "total": len(items), "matched": len(matched), "offset": offset, "limit": limit,
+                  "next_offset": offset + limit if offset + limit < len(matched) else None, "entries": entries}
+        if folder_sizes:
+            result["size_complete"] = all(complete for _, complete in sizes.values())
+        return result
 
     def stat(self, server: str, path: str):
         path = PurePosixPath(remote_path(path, root_ok=False))
-        return next((f for f in self.list_files(server, str(path.parent)) if f["name"] == path.name), None)
+        return next((f for f in self._list(server, str(path.parent)) if f["name"] == path.name), None)
 
     def read_file(self, server: str, path: str) -> dict:
         """Read a UTF-8 text file up to 2 MiB and return its SHA-256 for write_file."""
@@ -479,7 +548,7 @@ class Files:
         return {"source": source, "destination": destination}
 
     def _names(self, server: str, directory: str) -> set[str]:
-        return {item["name"] for item in self.list_files(server, directory)}
+        return {item["name"] for item in self._list(server, directory)}
 
     def copy_file(self, server: str, source: str, destination: str | None = None) -> dict:
         """Copy one regular file (Wings cannot copy folders; use compress_files). Without destination the copy is named like "name copy.ext" next to the source. destination must not exist and its parent must exist. Never overwrites."""
@@ -582,8 +651,8 @@ class Files:
             for name in self._names(server_id, destination):
                 if name.startswith(prefix):
                     self.move_file(server_id, f"{destination}/{name}", f"{destination}/{name[len(prefix):]}")
-            entries = [{"name": i["name"], "is_file": bool(i.get("is_file"))} for i in self.list_files(server_id, destination)]
-            size, complete = self._tree_bytes(server_id, destination, [TRASH_WALK_LIMIT])
+            entries = [{"name": i["name"], "is_file": bool(i.get("is_file"))} for i in self._list(server_id, destination)]
+            size, complete = self._tree_bytes(server_id, destination, [WALK_LIMIT])
         return {"server": server_id, "archive": archive, "extracted_to": destination, "entries": entries, "bytes": size, "size_complete": complete}
 
     def trash_file(self, server: str, path: str) -> dict:
@@ -623,7 +692,7 @@ class Files:
             return []
         if trash.get("is_file"):
             raise ValueError(f"{TRASH} exists as a file.")
-        return self.list_files(server, TRASH)
+        return self._list(server, TRASH)
 
     def _trash_record(self, server: str, record: str) -> str:
         try:
@@ -638,7 +707,7 @@ class Files:
                 return total, False
             budget[0] -= 1
             current = pending.pop()
-            for item in self.list_files(server, current):
+            for item in self._list(server, current):
                 if item.get("is_file") or item.get("is_symlink"):
                     total += item.get("size") or 0
                 else:
@@ -676,7 +745,7 @@ class Files:
         """List /.mcp-trash items oldest first: name, recorded original_path (null for items trashed before records existed), trashed_at, age_days and bytes. Folder sizes are summed recursively within a listing budget; size_complete=false means the total is a lower bound. Read-only."""
         server_id = self.server_id(server)
         listing = self._trash_listing(server_id)
-        entries = self._trash_entries(server_id, listing, {i["name"] for i in listing}, [TRASH_WALK_LIMIT])
+        entries = self._trash_entries(server_id, listing, {i["name"] for i in listing}, [WALK_LIMIT])
         return {"server": server_id, "count": len(entries), "total_bytes": sum(e["bytes"] for e in entries),
                 "size_complete": all(e["size_complete"] for e in entries), "entries": entries}
 
@@ -740,7 +809,7 @@ class Files:
                         skipped.append(i["name"])
                     elif stamp_time(m.group(1)) <= cutoff:
                         selected.append(i)
-            chosen = self._trash_entries(server_id, selected, names, [TRASH_WALK_LIMIT])
+            chosen = self._trash_entries(server_id, selected, names, [WALK_LIMIT])
             result = {"server": server_id, "dry_run": dry_run, "count": len(chosen), "bytes": sum(e["bytes"] for e in chosen),
                       "size_complete": all(e["size_complete"] for e in chosen), "entries": chosen, "skipped_without_timestamp": skipped}
             targets = [n for e in chosen for n in (e["name"], e["record"]) if n]
