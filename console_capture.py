@@ -17,6 +17,9 @@ from websockets.asyncio.client import connect
 from websockets.exceptions import WebSocketException
 
 MAX_BYTES = 32 * 1024 * 1024  # Combined raw events and readable output.
+# A watched capture ends early, so it may wait longer; stay below the MCP client's 180 s tool timeout.
+WATCH_SECONDS = 150
+ENDED = {"duration_elapsed", "until_matched", "fail_on_matched"}
 MAX_LINES = 100_000
 MAX_GROUPS = 5000
 OUTPUT_EVENTS = {"console output", "daemon message", "install output"}
@@ -109,9 +112,31 @@ def parse_message(raw) -> tuple[str, list[str]]:
     return message["event"], args
 
 
-async def capture(root: Path, server: str, credentials: dict, origin: str, seconds: int, include_recent: bool, on_ready=None) -> dict:
-    if isinstance(seconds, bool) or not isinstance(seconds, int) or not 1 <= seconds <= 60:
-        raise ValueError("seconds must be an integer between 1 and 60.")
+def watch_pattern(name: str, value):
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value or len(value) > 500:
+        raise ValueError(f"{name} must be a regular expression of 1..500 characters.")
+    try:
+        return re.compile(value)
+    except re.error as exc:
+        raise ValueError(f"{name} is not a valid regular expression: {exc}") from None
+
+
+def check_watch(seconds, until: str | None, fail_on: str | None):
+    """Validate a capture duration and optional stop patterns before any connection is made."""
+    until_re, fail_re = watch_pattern("until", until), watch_pattern("fail_on", fail_on)
+    limit = WATCH_SECONDS if until_re or fail_re else 60
+    if isinstance(seconds, bool) or not isinstance(seconds, int) or not 1 <= seconds <= limit:
+        raise ValueError(f"seconds must be an integer between 1 and {limit}" + ("." if limit == WATCH_SECONDS else " (up to 150 with until/fail_on)."))
+    return until_re, fail_re
+
+
+async def capture(root: Path, server: str, credentials: dict, origin: str, seconds: int, include_recent: bool, on_ready=None,
+                  until: str | None = None, fail_on: str | None = None) -> dict:
+    """Record console output for `seconds`. With `until`/`fail_on`, stop at the first ANSI-stripped line matching either
+    (fail_on wins on the same line); `seconds` is then the maximum wait, up to WATCH_SECONDS."""
+    until_re, fail_re = check_watch(seconds, until, fail_on)
     socket, token = credentials.get("socket", ""), credentials.get("token", "")
     parsed = urlsplit(socket)
     if parsed.scheme not in {"ws", "wss"} or not parsed.hostname or parsed.username or parsed.password or parsed.fragment or not token:
@@ -143,6 +168,8 @@ async def capture(root: Path, server: str, credentials: dict, origin: str, secon
                         "events": 0, "saved_bytes": 0, "status": "capturing", "stop_reason": None,
                         "timestamp_meaning": "Local UTC receipt time, not the original server event time.",
                         "raw_events_path": str(folder / "events.jsonl"), "log_path": str(folder / "console.log")}
+            if until_re or fail_re:
+                metadata.update(until=until, fail_on=fail_on, match=None)
             (folder / "metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
             started = time.monotonic()
             deadline = started + seconds
@@ -183,6 +210,14 @@ async def capture(root: Path, server: str, credentials: dict, origin: str, secon
                         break
                     raw_file.write(record)
                     log_file.write(content)
+                    if until_re or fail_re:
+                        for offset, line in enumerate(content.decode("utf-8").split("\n")[:-1], start=line_count + 1):
+                            text = clean(line)
+                            kind = "fail_on" if fail_re and fail_re.search(text) else "until" if until_re and until_re.search(text) else None
+                            if kind:
+                                metadata["match"] = {"kind": kind, "line": offset, "text": text[:500]}
+                                metadata["stop_reason"] = kind + "_matched"
+                                break
                     line_count += new_lines
                     metadata["events"] += 1
                     metadata["saved_bytes"] += size
@@ -201,7 +236,7 @@ async def capture(root: Path, server: str, credentials: dict, origin: str, secon
         if folder is not None:
             metadata["elapsed_seconds"] = round(time.monotonic() - started, 3)
             metadata["finished_at"] = utc_now()
-            metadata["status"] = "completed" if metadata["stop_reason"] == "duration_elapsed" else "partial"
+            metadata["status"] = "completed" if metadata["stop_reason"] in ENDED else "partial"
             try:
                 # Files are closed above, including on cancellation. A hard process kill may still leave status=capturing.
                 if (folder / "console.log").exists():

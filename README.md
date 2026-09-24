@@ -1,6 +1,6 @@
 # Pterodactyl MCP
 
-Pterodactyl Client API를 사용하는 로컬 stdio MCP입니다. 파일 관리·복원, 게임 서버 제어, 콘솔 수집·명령 실행 등 20개 도구를 제공합니다.
+Pterodactyl Client API를 사용하는 로컬 stdio MCP입니다. 파일 관리·배포·복원, 게임 서버 제어, 콘솔 수집·명령 실행, 관리자 작업 등 55개 도구를 제공합니다.
 공식 Python MCP SDK 1.x 유지보수 버전을 사용합니다. Panel/Wings 설치나 서버 재시작은 필요하지 않습니다.
 
 특정 커뮤니티나 게임에 종속되지 않습니다. Pterodactyl이 관리하는 서버의 공통 파일·전원·콘솔 API를 사용하며, 게임 전용 플러그인이나 RCON 연결은 요구하지 않습니다.
@@ -66,6 +66,9 @@ HTTP 주소는 API 키와 파일 전송을 암호화하지 않습니다. 가능�
 | write_file | 텍스트 생성/수정, 원본 백업, 결과 재조회 |
 | download_file | 바이너리/텍스트를 로컬 transfers에 다운로드, 최대 2 GiB |
 | upload_file | transfers의 파일을 서버에 업로드, 최대 2 GiB |
+| deploy_file | transfers의 파일 하나로 여러 서버의 파일 교체·생성, 원본 휴지통 보관, 크기/해시 검증, 기본은 미리보기 |
+| rollback_deploy | deploy_file 기록으로 배포 되돌리기(배포 후 바뀐 파일은 거부), 기본은 미리보기 |
+| compare_files | 두 폴더(같은/다른 서버)를 재귀 비교: 한쪽에만 있음·크기 다름·선택적 해시 비교 |
 | create_directory | 폴더 생성 |
 | move_file | 파일/폴더 이동, 이름 변경 |
 | copy_file | 파일 복사(폴더 제외), 기본 이름 `이름 copy.확장자` 또는 지정 경로 |
@@ -77,9 +80,9 @@ HTTP 주소는 API 키와 파일 전송을 암호화하지 않습니다. 가능�
 | empty_trash | 휴지통 항목 영구 삭제(이름 지정 또는 N일 경과), 미리보기 지원 |
 | get_server_status | 실행 상태와 CPU·메모리 등 자원 사용량 조회 |
 | start_server | 게임 서버 시작 요청 |
-| restart_server | 게임 서버 재시작 요청 |
+| restart_server | 게임 서버 재시작 요청, 선택적으로 콘솔에서 부팅 완료/실패 줄 대기 |
 | stop_server | 게임 서버 정상 종료 요청 |
-| capture_console | 요청 시 정해진 시간 동안 콘솔 원문 저장 및 요약 |
+| capture_console | 요청 시 정해진 시간 동안 또는 지정한 줄(until/fail_on)이 나올 때까지 콘솔 원문 저장 및 요약 |
 | read_console_capture | 저장된 콘솔 로그의 줄 단위 조회·문자열 검색 |
 | diagnose_connection | 연결된 계정·서버 권한·Wings 연결 진단 |
 | list_console_captures | 서버·기간별 로컬 콘솔 수집 기록 목록 |
@@ -133,7 +136,7 @@ Wings는 없는 폴더에도 HTTP 500을 돌려주므로, 500이 나면 상위 �
 복사·압축·해제는 기존 파일을 덮어쓰지 않습니다. `copy_file`은 일반 파일만 복사하며, 폴더는 `compress_files`로 보관합니다.
 `compress_files`는 Wings가 만드는 tar.gz만 지원하므로 `destination`은 `.tar.gz` 또는 `.tgz`로 끝나야 합니다.
 Wings는 압축을 풀 때 같은 이름의 기존 파일을 덮어씁니다. 그래서 `decompress_file`은 존재하지 않는 새 폴더에만 풀고, 작업 중 아카이브를 그 폴더로 잠시 옮겼다가 원래 경로로 되돌립니다.
-플러그인 배포는 새 폴더에 풀고 내용을 확인한 뒤, 교체할 파일을 `trash_file`로 옮기고 `move_file`로 제자리에 놓습니다.
+플러그인 배포는 `deploy_file`(아래 참고)을 사용합니다. 압축본은 새 폴더에 풀고 내용을 확인한 뒤, 교체할 파일을 `trash_file`로 옮기고 `move_file`로 제자리에 놓습니다.
 압축·해제 요청은 150초 후 응답을 기다리지 않지만 Wings에서는 계속 진행될 수 있으므로, 시간 초과 시 폴더를 확인한 뒤 다시 시도합니다.
 
 `trash_file`은 항목을 `/.mcp-trash/<시각-고유값>-<이름>`으로 옮기고, 원래 경로를 `/.mcp-trash/<시각-고유값>.json`에 기록합니다.
@@ -146,6 +149,26 @@ Wings는 압축을 풀 때 같은 이름의 기존 파일을 덮어씁니다. �
 Pterodactyl API에는 조건부 원자적 쓰기가 없으므로 해시 확인과 쓰기 사이에 외부 프로그램이 수정하는 경쟁 상황까지 막지는 못합니다.
 동일 파일의 동시 편집을 피하세요. API 키의 권한은 해당 패널 계정의 서버 접근 권한을 따릅니다.
 
+## 배포·되돌리기·비교
+
+`deploy_file(local_name, targets=[{"server": ..., "path": ...}, ...])`는 transfers의 파일 하나로 서버 1~20곳의 같은 파일을 목록 순서대로 교체하거나 새로 만듭니다.
+`apply=true`가 없으면 대상별 현재 크기와 예정 작업(`create`/`replace`/`replace_unless_identical`), 상위 폴더가 없는 등의 문제만 보여주고 아무것도 바꾸지 않습니다. 문제가 있으면 `apply=true`여도 실행하지 않습니다.
+
+대상마다 다음 순서로 진행합니다.
+
+1. 기존 파일이 올릴 파일과 SHA-256이 같으면 건드리지 않습니다(`unchanged`). 크기가 같을 때만 해시를 받아 비교합니다.
+2. 기존 파일을 `/.mcp-trash`로 옮깁니다. 덮어쓰지 않고 옮기므로 실행 중인 서버가 이미 불러온 파일은 영향을 받지 않습니다. `keep_local_copy=true`면 `transfers/deploy-<배포 ID>/`에도 받아 둡니다.
+3. 업로드 후 `verify="size"`(기본)는 크기를, `verify="sha256"`은 다시 받아 해시를 비교합니다.
+4. 실패하면 그 대상은 올린 파일을 휴지통으로 옮기고 원본을 되돌린 뒤, 뒤의 대상은 건드리지 않고 멈춥니다. 테스트 서버를 목록 앞에 두세요.
+
+진행 상황은 단계마다 설정 파일 옆 `deploys/<배포 ID>.json`에 기록합니다. 도구 호출이 시간 초과로 끊겨도 이 기록으로 어디까지 바뀌었는지 확인할 수 있습니다.
+`rollback_deploy(deploy_id)`는 마지막 대상부터 원본을 되돌립니다. 배포 후 파일이 바뀌었으면(해시 불일치) 그 대상은 거부하고, 새로 만든 파일은 휴지통으로만 옮깁니다. 자동 복구가 실패한 대상은 다시 시도합니다. 역시 `apply=true`가 있어야 실행합니다.
+두 도구 모두 서버를 재시작하지 않습니다. 파일은 한 번에 최대 2 GiB이며, 대상이 많거나 파일이 크면 MCP 클라이언트의 도구 시간 제한(180초)에 걸릴 수 있으므로 나누어 실행합니다.
+
+`compare_files(left_server, left_directory, right_server, right_directory)`는 두 폴더를 하위까지 상대 경로로 비교해 `only_left`, `only_right`, `different`(크기·종류 다름), `same` 개수를 돌려줍니다. `/.mcp-trash`는 제외합니다.
+`pattern`은 상대 경로에 대한 대소문자 구분 glob이며 `*`는 폴더 경계도 넘습니다(`*.so`). 크기가 같다고 내용이 같은 것은 아니므로, `hash_same_size=true`면 크기가 같은 파일을 양쪽에서 받아 SHA-256으로 비교합니다(합계 1 GiB 초과 시 거부).
+폴더 조회 횟수 상한에 걸리면 `complete: false`로 표시합니다. 읽기 전용입니다.
+
 ## 서버 시작·종료와 권한
 
 `start_server`, `restart_server`, `stop_server`는 기존 Client API 키를 사용합니다.
@@ -157,6 +180,11 @@ Pterodactyl API에는 조건부 원자적 쓰기가 없으므로 해시 확인�
 빠른 재시작이 조회 사이에 끝나 그 증거를 놓치면 실제로 재시작했어도 `completed=false`일 수 있습니다. 이때 자동으로 다시 재시작하지 않습니다.
 대기 시간 초과와 상태 조회 실패를 구분하고, 요청 수락 여부를 유지해서 반환합니다. 이후 상태는 `get_server_status`로 확인합니다.
 `running`도 게임 로딩 및 플레이어 접속 준비 완료를 보장하지 않습니다. 시간 초과 시 상태부터 확인하고 재시작을 무조건 반복하지 않습니다.
+
+`restart_server(server="my-server", until="...", fail_on="...", console_seconds=120)`은 콘솔에 먼저 연결한 뒤 재시작을 보내고, 부팅 출력에서 `until`(예상한 줄) 또는 `fail_on`(실패 줄) 정규식이 처음 나올 때 멈춥니다. 콘솔 연결에 실패하면 재시작을 보내지 않습니다.
+결과의 `console.stop_reason`은 `until_matched`, `fail_on_matched`, 둘 다 없으면 `duration_elapsed`이고 `console.match`에 해당 줄이 있습니다. `console_seconds`는 1~150초이며 `wait_seconds`와 함께 쓸 수 없습니다.
+`until_matched`도 해당 줄이 출력됐다는 뜻일 뿐 게임 플레이 정상 동작을 보장하지 않습니다. 줄이 안 나왔다고 재시작을 자동으로 반복하지 않습니다.
+재시작 출력에는 종료 중인 이전 프로세스의 로그도 포함됩니다. 게임에 따라 정상 종료 때도 `Segmentation fault` 같은 줄을 남기므로(CS2가 그렇습니다), 실패 판정에는 Wings가 비정상 종료 시 출력하는 `Detected server process in a crashed state`처럼 부팅 실패에만 나오는 줄을 쓰세요.
 
 일반 부사용자는 각각 `control.start`, `control.restart`, `control.stop` 권한이 필요합니다.
 서버 소유자와 패널 관리자는 Pterodactyl 서버 권한 정책을 따릅니다.
@@ -217,6 +245,7 @@ API 키, 이메일, 원본 오류 응답은 결과에 포함하지 않습니다.
 
 `capture_console(server="my-server", seconds=30)`은 연결·인증 후 30초 동안 콘솔을 수집하고 연결을 닫습니다.
 기본 30초, 허용 범위는 1~60초입니다. 상시 수집 서비스는 실행하지 않으며, 게임 명령이나 전원 신호도 보내지 않습니다.
+`until`/`fail_on` 정규식을 주면 ANSI 코드를 제거한 각 줄에 대해 검사하고 처음 일치한 줄에서 멈춥니다. 같은 줄이 둘 다에 걸리면 `fail_on`이 우선합니다. 이때 `seconds`는 최대 대기 시간이며 150초까지 허용합니다.
 `websocket.connect` 권한과 MCP 실행 컴퓨터에서 Wings WebSocket 주소에 접근할 수 있는 연결이 필요합니다.
 
 저장 위치는 설정 파일 옆 `captures/<capture_id>/`이며 MCP가 실행되는 로컬 컴퓨터에 생성합니다.
@@ -230,7 +259,7 @@ API 키, 이메일, 원본 오류 응답은 결과에 포함하지 않습니다.
 과거 로그가 실시간 로그와 겹칠 수 있고 보관 범위 밖의 과거 내용은 복구하지 못합니다. 수신 시각을 과거 메시지의 발생 시각으로 해석하지 마세요.
 
 원문 파일 합계 32 MiB 또는 100,000개의 LF 줄바꿈에 도달하면 수집을 중단합니다.
-반환된 `status=completed`는 지정한 수집 시간이 끝났다는 뜻이며, 서버 측에서 메시지가 누락되지 않았음을 보장하지는 않습니다.
+반환된 `status=completed`는 지정한 수집 시간이 끝났거나 `until`/`fail_on` 줄에서 멈췄다는 뜻이며(`stop_reason`으로 구분), 서버 측에서 메시지가 누락되지 않았음을 보장하지는 않습니다.
 끊김·오류·용량 제한은 `status=partial`과 `stop_reason`으로 알리고 이미 수신한 내용을 보존합니다.
 요청 취소 시 연결을 닫고 메타데이터에 취소를 기록합니다. 프로세스 자체가 강제 종료되면 종료 정보가 기록되지 않을 수 있습니다.
 

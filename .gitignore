@@ -10,6 +10,7 @@ build/
 backups/
 transfers/
 captures/
+deploys/
 
 # Local test code, helpers, and reports
 test_*.py
