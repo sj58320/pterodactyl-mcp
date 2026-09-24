@@ -1,6 +1,6 @@
 # Pterodactyl MCP
 
-Pterodactyl Client API를 사용하는 로컬 stdio MCP입니다. 파일 관리·배포·복원, 게임 서버 제어, 콘솔 수집·명령 실행, 관리자 작업 등 55개 도구를 제공합니다.
+Pterodactyl Client API를 사용하는 로컬 stdio MCP입니다. 파일 관리·배포·복원, 게임 서버 제어, 콘솔 수집·명령 실행, 관리자 작업 등 56개 도구를 제공합니다.
 공식 Python MCP SDK 1.x 유지보수 버전을 사용합니다. Panel/Wings 설치나 서버 재시작은 필요하지 않습니다.
 
 특정 커뮤니티나 게임에 종속되지 않습니다. Pterodactyl이 관리하는 서버의 공통 파일·전원·콘솔 API를 사용하며, 게임 전용 플러그인이나 RCON 연결은 요구하지 않습니다.
@@ -66,6 +66,7 @@ HTTP 주소는 API 키와 파일 전송을 암호화하지 않습니다. 가능�
 | write_file | 텍스트 생성/수정, 원본 백업, 결과 재조회 |
 | download_file | 바이너리/텍스트를 로컬 transfers에 다운로드, 최대 2 GiB |
 | upload_file | transfers의 파일을 서버에 업로드, 최대 2 GiB |
+| pull_file | 인터넷 URL(GitHub 릴리스 등)을 이 컴퓨터를 거치지 않고 서버가 직접 받아 새 파일로 저장, 크기/해시 검증 |
 | deploy_file | transfers의 파일 하나로 여러 서버의 파일 교체·생성, 원본 휴지통 보관, 크기/해시 검증, 기본은 미리보기 |
 | rollback_deploy | deploy_file 기록으로 배포 되돌리기(배포 후 바뀐 파일은 거부), 기본은 미리보기 |
 | compare_files | 두 폴더(같은/다른 서버)를 재귀 비교: 한쪽에만 있음·크기 다름·선택적 해시 비교 |
@@ -148,6 +149,21 @@ Wings는 압축을 풀 때 같은 이름의 기존 파일을 덮어씁니다. �
 강제 종료(kill), 휴지통 밖 파일의 영구 삭제, 사용자 생성, 서버 생성 전용 도구는 포함하지 않습니다.
 Pterodactyl API에는 조건부 원자적 쓰기가 없으므로 해시 확인과 쓰기 사이에 외부 프로그램이 수정하는 경쟁 상황까지 막지는 못합니다.
 동일 파일의 동시 편집을 피하세요. API 키의 권한은 해당 패널 계정의 서버 접근 권한을 따릅니다.
+
+## 서버에서 URL 직접 받기
+
+`pull_file(server, url, path, expected_sha256=None)`은 Wings가 URL을 직접 받아 서버의 새 파일로 저장합니다. 파일이 이 컴퓨터를 거치지 않으므로 GitHub 릴리스 같은 외부 배포본에 적합합니다.
+상위 폴더가 있어야 하고 대상 파일은 없어야 합니다(덮어쓰지 않음).
+
+Wings의 원격 다운로드에는 제약이 있어 MCP가 먼저 확인합니다.
+
+- Wings는 리다이렉트를 따라가지 않습니다(`302 Found` 오류). MCP가 리다이렉트를 최대 5번 따라가 최종 URL을 넘깁니다. GitHub 릴리스 주소는 `release-assets.githubusercontent.com`으로 넘어갑니다.
+- Wings는 `Content-Length`가 없는 응답을 거부합니다. Wings(Go)는 `Accept-Encoding: gzip`을 보내고 압축 응답을 풀면서 길이를 버리므로, `Content-Encoding`이 있는 응답도 실패합니다(`raw.githubusercontent.com`이 그렇습니다). 이런 URL은 Wings에 보내기 전에 거부합니다. 이 컴퓨터로 받아 transfers에 넣은 뒤 `upload_file`/`deploy_file`을 쓰세요.
+- Wings 설정의 `disable_remote_download`가 켜져 있거나 내부·사설 주소면 받지 않습니다.
+
+요청은 `foreground`로 보내 Wings의 실패를 그대로 받습니다. 기본 방식에서는 다운로드가 실패해도 패널이 `204`로 응답합니다. 실패 이유는 Wings 로그에만 남습니다.
+받은 뒤 크기를 `Content-Length`와, `expected_sha256`이 있으면 해시와 비교하고, 맞지 않으면 파일을 `/.mcp-trash`로 옮기고 오류를 냅니다.
+압축 배포본은 `decompress_file`로 새 폴더에 풀고, 교체할 파일을 `trash_file`로 옮긴 뒤 `move_file`로 제자리에 놓습니다.
 
 ## 배포·되돌리기·비교
 
