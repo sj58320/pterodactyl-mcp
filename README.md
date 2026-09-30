@@ -1,6 +1,6 @@
 # Pterodactyl MCP
 
-Pterodactyl Client API를 사용하는 로컬 stdio MCP입니다. 파일 관리·배포·복원, 게임 서버 제어, 콘솔 수집·명령 실행, 관리자 작업 등 56개 도구를 제공합니다.
+Pterodactyl Client API를 사용하는 로컬 stdio MCP입니다. 파일 관리·배포·복원, 게임 서버 제어, 콘솔 수집·명령 실행, 관리자 작업 등 57개 도구를 제공합니다.
 공식 Python MCP SDK 1.x 유지보수 버전을 사용합니다. Panel/Wings 설치나 서버 재시작은 필요하지 않습니다.
 
 특정 커뮤니티나 게임에 종속되지 않습니다. Pterodactyl이 관리하는 서버의 공통 파일·전원·콘솔 API를 사용하며, 게임 전용 플러그인이나 RCON 연결은 요구하지 않습니다.
@@ -70,6 +70,7 @@ HTTP 주소는 API 키와 파일 전송을 암호화하지 않습니다. 가능�
 | deploy_file | transfers의 파일 하나로 여러 서버의 파일 교체·생성, 원본 휴지통 보관, 크기/해시 검증, 기본은 미리보기 |
 | rollback_deploy | deploy_file 기록으로 배포 되돌리기(배포 후 바뀐 파일은 거부), 기본은 미리보기 |
 | compare_files | 두 폴더(같은/다른 서버)를 재귀 비교: 한쪽에만 있음·크기 다름·선택적 해시 비교 |
+| search_files | 폴더와 하위 전체를 이름 또는 파일 내용(grep)으로 검색. 검색 API를 추가한 Panel·Wings 필요 |
 | create_directory | 폴더 생성 |
 | move_file | 파일/폴더 이동, 이름 변경 |
 | copy_file | 파일 복사(폴더 제외), 기본 이름 `이름 copy.확장자` 또는 지정 경로 |
@@ -164,6 +165,16 @@ Wings의 원격 다운로드에는 제약이 있어 MCP가 먼저 확인합니�
 요청은 `foreground`로 보내 Wings의 실패를 그대로 받습니다. 기본 방식에서는 다운로드가 실패해도 패널이 `204`로 응답합니다. 실패 이유는 Wings 로그에만 남습니다.
 받은 뒤 크기를 `Content-Length`와, `expected_sha256`이 있으면 해시와 비교하고, 맞지 않으면 파일을 `/.mcp-trash`로 옮기고 오류를 냅니다.
 압축 배포본은 `decompress_file`로 새 폴더에 풀고, 교체할 파일을 `trash_file`로 옮긴 뒤 `move_file`로 제자리에 놓습니다.
+
+## 하위 폴더 검색 (이름·내용)
+
+`search_files(server, query, directory="/", mode="name")`는 폴더와 그 아래 전체를 노드에서 한 번에 검색합니다. `mode="name"`은 파일·폴더 이름, `mode="content"`는 텍스트 파일의 줄 내용(grep과 비슷)을 찾습니다.
+ASCII 대소문자는 기본으로 구분하지 않고(`case_sensitive=true`로 구분), 결과 경로는 서버 루트 기준입니다. 내용 검색 결과에는 줄 번호와 해당 줄(최대 300바이트)이 붙습니다.
+바이너리(앞 8 KiB에 NUL)와 4 MiB를 넘는 파일, 서버의 차단 목록(denylist)은 건너뛰고 `skipped`로 셉니다. 심볼릭 링크는 따라가지 않습니다.
+결과는 `limit`(기본 200, 최대 1000)개에서 멈추고 `truncated: true`, 15초 안에 끝나지 않으면 `timed_out: true`를 돌려줍니다. 노드당 동시에 두 검색만 실행합니다.
+
+이 기능은 **기본 Pterodactyl에는 없는** `POST /api/client/servers/{server}/files/search`(Panel)와 `POST /api/servers/{server}/files/search`(Wings)가 필요합니다. 없는 패널에서는 `not_supported_or_not_found`, Wings에 없으면 `search_failed`를 반환합니다.
+폴더를 하나씩 조회하는 방식(`list_files`, `compare_files`)은 폴더마다 요청이 들어가 패널의 분당 요청 한도(기본 256)에 걸리지만, 이 검색은 요청 한 번이며 활동 로그에 `server:file.search`로 남습니다.
 
 ## 배포·되돌리기·비교
 
