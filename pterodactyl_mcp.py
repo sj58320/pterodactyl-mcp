@@ -824,7 +824,7 @@ class Files:
                             json={"directory": directory, "query": query, "mode": mode, "case_sensitive": case_sensitive, "limit": limit})
         except PanelError as exc:
             if exc.status == 404:
-                raise PanelError("This panel has no /files/search endpoint (stock Pterodactyl), or the folder does not exist.", "not_supported_or_not_found", 404) from None
+                raise PanelError("No /files/search endpoint: the panel, or this server's node (Wings), is stock Pterodactyl. Also returned when the folder does not exist.", "not_supported_or_not_found", 404) from None
             if exc.status is not None and exc.status >= 500:
                 raise PanelError("Search failed on the node: Wings may lack the /files/search endpoint, or the folder does not exist.", "search_failed", exc.status) from None
             raise
