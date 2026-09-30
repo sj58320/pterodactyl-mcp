@@ -1,6 +1,6 @@
 # Pterodactyl MCP
 
-Pterodactyl Client API를 사용하는 로컬 stdio MCP입니다. 파일 관리·배포·복원, 게임 서버 제어, 콘솔 수집·명령 실행, 관리자 작업 등 56개 도구를 제공합니다.
+Pterodactyl Client API를 사용하는 로컬 stdio MCP입니다. 파일 관리·배포·복원, 게임 서버 제어, 콘솔 수집·명령 실행, 활동 로그 조회, 관리자 작업 등 58개 도구를 제공합니다.
 공식 Python MCP SDK 1.x 유지보수 버전을 사용합니다. Panel/Wings 설치나 서버 재시작은 필요하지 않습니다.
 
 특정 커뮤니티나 게임에 종속되지 않습니다. Pterodactyl이 관리하는 서버의 공통 파일·전원·콘솔 API를 사용하며, 게임 전용 플러그인이나 RCON 연결은 요구하지 않습니다.
@@ -66,6 +66,7 @@ HTTP 주소는 API 키와 파일 전송을 암호화하지 않습니다. 가능�
 | write_file | 텍스트 생성/수정, 원본 백업, 결과 재조회 |
 | download_file | 바이너리/텍스트를 로컬 transfers에 다운로드, 최대 2 GiB |
 | upload_file | transfers의 파일을 서버에 업로드, 최대 2 GiB |
+| upload_folder | transfers의 폴더를 하위 폴더·빈 폴더째 서버의 새 폴더로 업로드(폴더별 묶음 요청), 크기 검증 |
 | pull_file | 인터넷 URL(GitHub 릴리스 등)을 이 컴퓨터를 거치지 않고 서버가 직접 받아 새 파일로 저장, 크기/해시 검증 |
 | deploy_file | transfers의 파일 하나로 여러 서버의 파일 교체·생성, 원본 휴지통 보관, 크기/해시 검증, 기본은 미리보기 |
 | rollback_deploy | deploy_file 기록으로 배포 되돌리기(배포 후 바뀐 파일은 거부), 기본은 미리보기 |
@@ -85,6 +86,7 @@ HTTP 주소는 API 키와 파일 전송을 암호화하지 않습니다. 가능�
 | stop_server | 게임 서버 정상 종료 요청 |
 | capture_console | 요청 시 정해진 시간 동안 또는 지정한 줄(until/fail_on)이 나올 때까지 콘솔 원문 저장 및 요약 |
 | read_console_capture | 저장된 콘솔 로그의 줄 단위 조회·문자열 검색 |
+| list_activity | 서버 활동 로그 조회: 이벤트 이름·사용자·파일 경로·기간으로 거르기 |
 | diagnose_connection | 연결된 계정·서버 권한·Wings 연결 진단 |
 | list_console_captures | 서버·기간별 로컬 콘솔 수집 기록 목록 |
 | list_file_backups | 원래 서버·경로별 로컬 파일 백업 목록 |
@@ -245,6 +247,17 @@ cron은 패널의 시간대로 해석하며, 잘못된 식은 패널의 검증 �
 `diagnose_connection(server="my-server")`는 해당 서버의 실제 권한 목록, 소유자 여부, Wings 자원 조회와 실행 상태도 확인합니다.
 `ok`, `stage`, `error.code`로 설정 오류, 인증 실패, 권한 부족, 연결 실패, 호출 제한 등을 구분합니다.
 API 키, 이메일, 원본 오류 응답은 결과에 포함하지 않습니다. 진단은 읽기 전용이며 서버 전원이나 파일을 변경하지 않습니다.
+
+## 활동 로그 조회
+
+`list_activity(server="my-server", file="server.cfg", since="2026-09-01")`는 그 서버의 활동 로그를 최신순으로 돌려줍니다. 항목마다 시각, 이벤트, 패널 사용자, API 키 사용 여부, IP(볼 권한이 있을 때), 세부 내용(파일 경로 등)이 있습니다.
+`event`는 이벤트 이름 일부(`file.write`, `power`, `sftp`)로 패널이 거르고, `user`(패널 사용자 이름 정확히)와 `file`(항목에 든 경로의 일부)은 MCP가 거릅니다. 패널은 100개씩 보내므로 `limit`에 이른 페이지 끝에서 멈추고(조금 더 올 수 있음), 한 번에 최대 20페이지까지 봅니다. `next_page`가 있으면 `page=next_page`로 이어서 조회합니다.
+SFTP·업로드·콘솔 버튼(Start/Stop/명령)은 Wings가 모아서 보내므로 최대 1분쯤 늦게 나타납니다. `activity.read` 권한이 필요합니다.
+
+## 폴더 업로드
+
+`upload_folder(server="my-server", local_folder="addons-pack", destination="/game/csgo/addons/new-plugin")`는 transfers 안의 폴더를 하위 구조째 **새** 폴더로 올립니다. 대상 폴더가 이미 있으면 거부합니다(합치거나 덮어쓰지 않음). 부모 폴더는 있어야 합니다.
+같은 폴더의 파일은 한 요청(최대 50개/100 MB)으로 보내고, 빈 폴더도 만듭니다. 파일 하나는 노드의 업로드 한도(기본 500 MB) 아래, 폴더 전체는 2 GiB·5000개 이하입니다. 심볼릭 링크는 건너뜁니다. 올린 뒤 파일마다 크기를 비교해 `verified`로 알려줍니다. 중간에 실패하면 그때까지 올라간 개수와 함께 멈추니, 대상 폴더를 확인하거나 휴지통으로 옮긴 뒤 다시 시도합니다.
 
 ## 자동 파일 백업 찾기·복원
 
